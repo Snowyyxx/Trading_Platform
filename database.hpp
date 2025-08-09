@@ -1,16 +1,17 @@
-#pragma once
-#include <mutex>
-#include <nlohmann/json.hpp>
-#include "order.hpp"
+#ifndef DATABASE_HPP
+#define DATABASE_HPP
 
-using json = nlohmann::json;
+#include <sqlite3.h>
+#include <string>
 
-// Shared DB mutex
-extern std::mutex db_mutex;
+class Database {
+public:
+    explicit Database(const std::string& filename);
+    ~Database();
+    void insertTrade(const std::string& symbol, int quantity, double price);
 
-// Return value changed to int: the newly assigned order_id
-int insert_order(const Order &o);
+private:
+    sqlite3* db;
+};
 
-void update_status(const Order &o);
-void transaction_insert(const Order &buy, const Order &sell);
-json displayOrders();
+#endif

@@ -1,66 +1,68 @@
 #include "trading_engine.hpp"
 #include <iostream>
-#include <thread>
-#include <chrono>
-#include <algorithm>
 
-void TradingEngine::placeOrder(const Order &o) {
+TradingEngine::TradingEngine()
+    : db("stock_exchange.db"), incomingOrders(1024),
+      running(false), newOrderFlag(false),
+      benchmarkMode(false), benchmarkTarget(0) {}
+
+TradingEngine::~TradingEngine() { stop(); }
+
+void TradingEngine::start() {
+    running = true;
+    matcherThread = std::thread(&TradingEngine::matcherLoop, this);
+}
+
+void TradingEngine::stop() {
+    running = false;
+    cv.notify_all();
+    if (matcherThread.joinable()) matcherThread.join();
+}
+
+void TradingEngine::enableBenchmarkMode(int totalOrders) {
+    benchmarkMode = true;
+    benchmarkTarget = totalOrders;
+}
+
+void TradingEngine::addOrder(const Order& order) {
+    incomingOrders.push(order);
     {
-        std::lock_guard<std::mutex> lk(books_mtx);
-        // operator[] default‐constructs the OrderBook if missing
-        books[o.stock_id].addOrder(o);
+        std::lock_guard<std::mutex> lock(cv_m);
+        newOrderFlag = true;
     }
-    insert_order(o);  // DB insert (guarded by db_mutex)
+    cv.notify_one();
 }
 
-void TradingEngine::runMatcher() {
-    using namespace std::chrono_literals;
-    while (true) {
-        {
-            std::lock_guard<std::mutex> lk(books_mtx);
-            for (auto &kv : books) {
-                auto &book = kv.second;
-                Order buy, sell;
-                while (book.matchOrder(buy, sell)) {
-                    int traded = std::min(buy.units, sell.units);
-                    buy.units  -= traded;
-                    sell.units -= traded;
-                    settleTrade(buy, sell);
-                    if (buy.units  > 0) book.addOrder(buy);
-                    if (sell.units > 0) book.addOrder(sell);
-                }
+void TradingEngine::matcherLoop() {
+    int processedOrders = 0;
+    auto startTime = std::chrono::steady_clock::now();
+
+    while (running) {
+        std::unique_lock<std::mutex> lock(cv_m);
+        cv.wait(lock, [this] { return newOrderFlag || !running; });
+        newOrderFlag = false;
+        lock.unlock();
+
+        Order order;
+        while (incomingOrders.pop(order)) {
+            auto& book = books.try_emplace(order.symbol, order.symbol).first->second;
+            book.addOrder(order);
+
+            Order trade;
+            while (book.match(trade)) {
+                db.insertTrade(trade.symbol, trade.quantity, trade.price);
             }
-        }
-        std::this_thread::sleep_for(50ms);
-    }
-}
+            processedOrders++;
 
-void TradingEngine::settleTrade(Order &buy, Order &sell) {
-    buy.status  = (buy.units  > 0 ? "Partially Executed" : "Fully Executed");
-    sell.status = (sell.units > 0 ? "Partially Executed" : "Fully Executed");
-    update_status(buy);
-    update_status(sell);
-    transaction_insert(buy, sell);
-}
-
-void TradingEngine::runMonitor() {
-    using namespace std::chrono_literals;
-    while (true) {
-        std::this_thread::sleep_for(2s);
-
-        // **skip** printing while user is typing
-        if (input_active.load()) 
-            continue;
-
-        std::lock_guard<std::mutex> lk(books_mtx);
-        std::cout << "\n=== Live Order Books ===\n";
-        for (auto &kv : books) {
-            int sid  = kv.first;
-            auto &bk = kv.second;
-            std::cout << "Stock " << sid
-                      << " | Best Bid: " << bk.bestBid()
-                      << " | Best Ask: " << bk.bestAsk()
-                      << '\n';
+            if (benchmarkMode && processedOrders >= benchmarkTarget) {
+                auto endTime = std::chrono::steady_clock::now();
+                double seconds = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() / 1000.0;
+                std::cout << "Processed " << processedOrders << " orders in " << seconds
+                          << " seconds (" << (processedOrders / seconds) << " orders/sec)\n";
+                running = false;
+                cv.notify_all();
+                return;
+            }
         }
     }
 }

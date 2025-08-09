@@ -1,30 +1,40 @@
-#pragma once
-#include <unordered_map>
-#include <mutex>
-#include <atomic>
+#ifndef TRADING_ENGINE_HPP
+#define TRADING_ENGINE_HPP
+
+#include "order.hpp"
 #include "order_book.hpp"
 #include "database.hpp"
-
-// Global flag (defined in main.cpp) that indicates when the CLI is reading.
-extern std::atomic<bool> input_active;
+#include <boost/lockfree/queue.hpp>
+#include <unordered_map>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 class TradingEngine {
 public:
-    TradingEngine(){
-
-    }
-
-    // called by CLI thread
-    void placeOrder(const Order &o);
-
-    // background threads
-    void runMatcher();   // matches orders forever
-    void runMonitor();   // prints best bid/ask every 2s, but only when input_active==false
+    TradingEngine();
+    ~TradingEngine();
+    void start();
+    void stop();
+    void addOrder(const Order& order);
+    void enableBenchmarkMode(int totalOrders);
 
 private:
-    std::unordered_map<int, OrderBook> books;
-    std::mutex books_mtx;
+    void matcherLoop();
 
-    // after a match, update DB & possibly re‐queue residuals
-    void settleTrade(Order &buy, Order &sell);
+    std::unordered_map<std::string, OrderBook> books;
+    Database db;
+
+    boost::lockfree::queue<Order> incomingOrders;
+    std::thread matcherThread;
+    std::mutex cv_m;
+    std::condition_variable cv;
+    std::atomic<bool> running;
+    bool newOrderFlag;
+
+    bool benchmarkMode;
+    int benchmarkTarget;
 };
+
+#endif

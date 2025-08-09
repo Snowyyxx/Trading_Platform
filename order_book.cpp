@@ -1,42 +1,36 @@
 #include "order_book.hpp"
 
-// add a new order to the correct queue
-void OrderBook::addOrder(const Order &o) {
-    std::lock_guard<std::mutex> lk(mtx);  // lock so threads don’t collide
+OrderBook::OrderBook(const std::string& sym) : symbol(sym) {}
 
-    if (o.is_buy)
-        buy_q.push(o);    // push into buy queue
-    else
-        sell_q.push(o);   // push into sell queue
+void OrderBook::addOrder(const Order& order) {
+    if (order.type == OrderType::BUY) {
+        buyOrders.push(order);
+    } else {
+        sellOrders.push(order);
+    }
 }
 
-// try to match one buy and sell order
-bool OrderBook::matchOrder(Order &buy, Order &sell) {
-    std::lock_guard<std::mutex> lk(mtx);  // lock both queues
+bool OrderBook::match(Order& tradeResult) {
+    if (!buyOrders.empty() && !sellOrders.empty()) {
+        Order topBuy = buyOrders.top();
+        Order topSell = sellOrders.top();
 
-    // if either side is empty, no match is possible
-    if (buy_q.empty() || sell_q.empty())
-        return false;
+        if (topBuy.price >= topSell.price) {
+            int tradeQty = std::min(topBuy.quantity, topSell.quantity);
+            double tradePrice = (topBuy.price + topSell.price) / 2.0;
 
-    // no match if buyer isn't willing to pay enough
-    if (buy_q.top().price < sell_q.top().price)
-        return false;
+            tradeResult = Order(-1, symbol, OrderType::BUY, tradeQty, tradePrice);
 
-    // take the top buy and sell orders out of the queues
-    buy = buy_q.top();   buy_q.pop();
-    sell = sell_q.top(); sell_q.pop();
+            topBuy.quantity -= tradeQty;
+            topSell.quantity -= tradeQty;
+            buyOrders.pop();
+            sellOrders.pop();
 
-    return true;  // match was successful
-}
+            if (topBuy.quantity > 0) buyOrders.push(topBuy);
+            if (topSell.quantity > 0) sellOrders.push(topSell);
 
-// return the best bid (highest buy price)
-int OrderBook::bestBid() const {
-    std::lock_guard<std::mutex> lk(mtx);
-    return buy_q.empty() ? -1 : buy_q.top().price;
-}
-
-// return the best ask (lowest sell price)
-int OrderBook::bestAsk() const {
-    std::lock_guard<std::mutex> lk(mtx);
-    return sell_q.empty() ? -1 : sell_q.top().price;
+            return true;
+        }
+    }
+    return false;
 }
