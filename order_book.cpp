@@ -1,8 +1,18 @@
 #include "order_book.hpp"
+#include <iostream>
 
-OrderBook::OrderBook(const std::string& sym) : symbol(sym) {}
+static bool buyComp(const Order& a, const Order& b) {
+    return a.price < b.price;
+}
+static bool sellComp(const Order& a, const Order& b) {
+    return a.price > b.price;
+}
+
+OrderBook::OrderBook()
+    : buyOrders(buyComp), sellOrders(sellComp) {}
 
 void OrderBook::addOrder(const Order& order) {
+    std::lock_guard<std::mutex> lock(mtx);
     if (order.type == OrderType::BUY) {
         buyOrders.push(order);
     } else {
@@ -10,27 +20,18 @@ void OrderBook::addOrder(const Order& order) {
     }
 }
 
-bool OrderBook::match(Order& tradeResult) {
-    if (!buyOrders.empty() && !sellOrders.empty()) {
-        Order topBuy = buyOrders.top();
-        Order topSell = sellOrders.top();
-
-        if (topBuy.price >= topSell.price) {
-            int tradeQty = std::min(topBuy.quantity, topSell.quantity);
-            double tradePrice = (topBuy.price + topSell.price) / 2.0;
-
-            tradeResult = Order(-1, symbol, OrderType::BUY, tradeQty, tradePrice);
-
-            topBuy.quantity -= tradeQty;
-            topSell.quantity -= tradeQty;
-            buyOrders.pop();
-            sellOrders.pop();
-
-            if (topBuy.quantity > 0) buyOrders.push(topBuy);
-            if (topSell.quantity > 0) sellOrders.push(topSell);
-
-            return true;
-        }
+bool OrderBook::matchOrders() {
+    std::lock_guard<std::mutex> lock(mtx);
+    bool matched = false;
+    while (!buyOrders.empty() && !sellOrders.empty() &&
+           buyOrders.top().price >= sellOrders.top().price) {
+        Order buy = buyOrders.top(); buyOrders.pop();
+        Order sell = sellOrders.top(); sellOrders.pop();
+        int tradeQty = std::min(buy.quantity, sell.quantity);
+        std::cout << "Matched Order: BuyID=" << buy.id 
+                  << " SellID=" << sell.id
+                  << " Qty=" << tradeQty << " Price=" << sell.price << "\n";
+        matched = true;
     }
-    return false;
+    return matched;
 }

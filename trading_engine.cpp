@@ -2,67 +2,39 @@
 #include <iostream>
 
 TradingEngine::TradingEngine()
-    : db("stock_exchange.db"), incomingOrders(1024),
-      running(false), newOrderFlag(false),
-      benchmarkMode(false), benchmarkTarget(0) {}
+    : db("orders.db"), orderQueue(1024), running(false), guard(nullptr) {}
 
-TradingEngine::~TradingEngine() { stop(); }
+TradingEngine::~TradingEngine() {
+    stop();
+}
 
 void TradingEngine::start() {
     running = true;
-    matcherThread = std::thread(&TradingEngine::matcherLoop, this);
+    matcherThread = std::thread(&TradingEngine::matchLoop, this);
+    guard = new ThreadGuard(matcherThread);
 }
 
 void TradingEngine::stop() {
     running = false;
     cv.notify_all();
-    if (matcherThread.joinable()) matcherThread.join();
+    delete guard; // joins thread
 }
 
-void TradingEngine::enableBenchmarkMode(int totalOrders) {
-    benchmarkMode = true;
-    benchmarkTarget = totalOrders;
-}
-
-void TradingEngine::addOrder(const Order& order) {
-    incomingOrders.push(order);
-    {
-        std::lock_guard<std::mutex> lock(cv_m);
-        newOrderFlag = true;
-    }
+void TradingEngine::submitOrder(const Order& order) {
+    orderQueue.push(order);
     cv.notify_one();
 }
 
-void TradingEngine::matcherLoop() {
-    int processedOrders = 0;
-    auto startTime = std::chrono::steady_clock::now();
-
+void TradingEngine::matchLoop() {
     while (running) {
-        std::unique_lock<std::mutex> lock(cv_m);
-        cv.wait(lock, [this] { return newOrderFlag || !running; });
-        newOrderFlag = false;
-        lock.unlock();
+        std::unique_lock<std::mutex> lock(cvMutex);
+        cv.wait(lock, [this]{ return !orderQueue.empty() || !running; });
 
         Order order;
-        while (incomingOrders.pop(order)) {
-            auto& book = books.try_emplace(order.symbol, order.symbol).first->second;
-            book.addOrder(order);
-
-            Order trade;
-            while (book.match(trade)) {
-                db.insertTrade(trade.symbol, trade.quantity, trade.price);
-            }
-            processedOrders++;
-
-            if (benchmarkMode && processedOrders >= benchmarkTarget) {
-                auto endTime = std::chrono::steady_clock::now();
-                double seconds = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() / 1000.0;
-                std::cout << "Processed " << processedOrders << " orders in " << seconds
-                          << " seconds (" << (processedOrders / seconds) << " orders/sec)\n";
-                running = false;
-                cv.notify_all();
-                return;
-            }
+        while (orderQueue.pop(order)) {
+            orderBook.addOrder(order);
+            db.saveOrder(order);
+            orderBook.matchOrders();
         }
     }
 }
