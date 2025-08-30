@@ -3,42 +3,30 @@
 
 #include "order_book.hpp"
 #include "database.hpp"
-#include <boost/lockfree/queue.hpp>
-#include <condition_variable>
-#include <thread>
+#include <string>
+#include <vector>
 #include <atomic>
-
-class ThreadGuard {
-private:
-    std::thread& t;
-public:
-    explicit ThreadGuard(std::thread& t_) : t(t_) {}
-    ~ThreadGuard() {
-        if (t.joinable()) {
-            t.join();
-        }
-    }
-};
+#include <mutex>
+#include <unordered_map>
+#include <memory>
 
 class TradingEngine {
 private:
-    OrderBook orderBook;
-    Database db;
-    boost::lockfree::queue<Order> orderQueue;
-    std::mutex cvMutex;
-    std::condition_variable cv;
-    std::atomic<bool> running;
-    std::thread matcherThread;
-    ThreadGuard* guard;
+    Database& db;
+    std::atomic<int>& orderIdCounter;
+    
+    // A map from a stock symbol (string) to a unique pointer to its OrderBook.
+    std::unordered_map<std::string, std::unique_ptr<OrderBook>> order_books_;
+    
+    // A single mutex to protect access to the map of order books.
+    std::mutex engineMutex;
 
-    void matchLoop();
+    // Helper function to get or create an order book for a symbol.
+    OrderBook& getOrderBook(const std::string& symbol);
 
 public:
-    TradingEngine();
-    ~TradingEngine();
-    void start();
-    void stop();
-    void submitOrder(const Order& order);
+    explicit TradingEngine(Database& database, std::atomic<int>& counter);
+    std::string processCommand(const std::string& command);
 };
 
 #endif

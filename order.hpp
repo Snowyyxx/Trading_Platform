@@ -7,6 +7,7 @@ enum class OrderType { BUY, SELL };
 
 struct Order {
     int id;
+    std::string symbol; // <-- NEW FIELD
     OrderType type;
     double price;
     int quantity;

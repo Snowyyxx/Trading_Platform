@@ -4,23 +4,21 @@
 #include "order.hpp"
 #include <queue>
 #include <mutex>
+#include <vector>
+#include <string>
 
 class OrderBook {
 private:
-    // Max-heap for buy orders (highest price first)
-    std::priority_queue<Order, std::vector<Order>, 
-        bool(*)(const Order&, const Order&)> buyOrders;
-
-    // Min-heap for sell orders (lowest price first)
-    std::priority_queue<Order, std::vector<Order>, 
-        bool(*)(const Order&, const Order&)> sellOrders;
-
-    std::mutex mtx;
+    using OrderComp = bool(*)(const Order&, const Order&);
+    std::priority_queue<Order, std::vector<Order>, OrderComp> buyOrders;
+    std::priority_queue<Order, std::vector<Order>, OrderComp> sellOrders;
+    mutable std::mutex mtx;
 
 public:
     OrderBook();
     void addOrder(const Order& order);
-    bool matchOrders();
+    std::string matchOrders();
+    std::string getDisplayString() const;
 };
 
 #endif

@@ -15,6 +15,7 @@ public:
     Database(const std::string& dbName);
     ~Database();
     void saveOrder(const Order& order);
+    int getMaxOrderId();
 };
 
 #endif
